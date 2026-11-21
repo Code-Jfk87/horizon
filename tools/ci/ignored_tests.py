@@ -857,7 +857,11 @@ def run(package, skip, number=None, count=None, only=None):
                 crash = status[1] == "signal" or status[2] != "101"
                 if crash and ended_by is None:
                     number = int(status[2])
-                    name = signal.Signals(number).name if status[1] == "signal" and number in signal.valid_signals() else None
+                    # The runner's name for it, as Cargo writes it ("signal: 9, SIGKILL: kill"): this machine's
+                    # signal module may have no such number (Windows has no 9).
+                    named = re.search(r"\(signal: \d+, (SIG[A-Z0-9]+)", line) if status[1] == "signal" else None
+                    known = status[1] == "signal" and number in signal.valid_signals()
+                    name = named[1] if named else signal.Signals(number).name if known else None
                     ended_by = f"{status[1]} {number}" + (f" ({name})" if name else "")
                 crashed |= crash
                 cargo_failure = False
