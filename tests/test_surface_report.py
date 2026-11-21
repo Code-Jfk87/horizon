@@ -4,6 +4,7 @@ import importlib.util
 import io
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -76,7 +77,7 @@ class ReportTests(unittest.TestCase):
             stub = work / "horizon-stage"
             # LF endings and a forward-slash path: bash reads a CR as part of each line, and a backslash as an escape.
             stub.write_text(f"""#!/bin/bash
-echo "$@" >> '{work.as_posix()}/calls'
+echo "$@" >> {shlex.quote(work.as_posix() + "/calls")}
 if [ "$1" = surface ]; then
   case "$2" in *base) [ {base_export} = 0 ] || {{ echo 'unclassified: x' >&2; echo 'horizon-stage surface: unknown key `access`' >&2; exit 1; }};; esac
   case "$2" in *head) [ {head_export} = 0 ] || {{ echo 'horizon-stage surface: a.rs: parse error' >&2; exit 1; }};; esac
@@ -131,7 +132,8 @@ exit {diff_exit}
         self.assertIn(f"--notes ", calls)
         # Both exports write their calls, and the diff compares them.
         self.assertIn("--calls ", calls.splitlines()[0])
-        self.assertRegex(calls, r"surface-diff \S+base\.json \S+head\.json --calls \S+base-calls\.json \S+head-calls\.json ")
+        # `.+?`, not `\S+`: a temporary folder's path can hold spaces (a Windows profile such as `C:\Users\Ann Lee`).
+        self.assertRegex(calls, r"surface-diff .+?base\.json .+?head\.json --calls .+?base-calls\.json .+?head-calls\.json ")
         code, text, calls = self.run_report(diff_exit=1, gate_on=True)
         self.assertEqual(code, 1)
         self.assertIn("fn:a", text)
@@ -145,8 +147,8 @@ exit {diff_exit}
         self.assertNotIn("--layouts", calls)
         _, text, calls = self.run_report(layouts=lambda: (True, "The base's compiled layouts: stored.\n"))
         self.assertTrue(text.startswith("The base's compiled layouts: stored.\nSurface: report\n"), text)
-        self.assertRegex(calls, r"--calls \S+base-calls\.json \S+head-calls\.json "
-                                r"--layouts \S+base-layouts\.json \S+head-layouts\.json --notes ")
+        self.assertRegex(calls, r"--calls .+?base-calls\.json .+?head-calls\.json "
+                                r"--layouts .+?base-layouts\.json .+?head-layouts\.json --notes ")
 
     def test_a_base_without_the_example_is_compared_by_source_with_a_warning(self):
         warning = "Warning: the base has no wire_layouts example, so only the source is compared.\n"
