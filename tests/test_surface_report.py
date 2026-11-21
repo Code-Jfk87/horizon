@@ -16,6 +16,12 @@ spec = importlib.util.spec_from_file_location("surface_report", ROOT / "tools/ci
 surface_report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(surface_report)
 
+# The bash that runs the stub tool. A bare "bash" from System32 or WindowsApps is WSL's, which has none of the
+# host's paths (as tests/test_pr_ready.py tells them apart); Git Bash on PATH runs it as on Linux.
+BASH = shutil.which("bash")
+POSIX_BASH = BASH is not None and not (
+    os.name == "nt" and os.path.basename(os.path.dirname(os.path.normcase(BASH))) in ("system32", "windowsapps"))
+
 MERGE = "tree t\nparent aaaa\nparent bbbb\nauthor x\n\nMerge bbbb into aaaa\n"
 SINGLE = "tree t\nparent aaaa\nauthor x\n\nA commit\n"
 
@@ -60,16 +66,17 @@ class GateTests(unittest.TestCase):
                 surface_report.gate(config)
 
 
-@unittest.skipUnless(shutil.which("bash"), "needs bash for the stub tool")
+@unittest.skipUnless(POSIX_BASH, "needs a POSIX bash for the stub tool")
 class ReportTests(unittest.TestCase):
     """report() against a stub horizon-stage whose behaviour each test sets."""
 
     def run_report(self, base_export=0, diff_exit=0, gate_on=False, head_export=0, diff_err="", layouts=None):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            tool = work / "horizon-stage"
-            tool.write_text(f"""#!/bin/bash
-echo "$@" >> {work}/calls
+            stub = work / "horizon-stage"
+            # LF endings and a forward-slash path: bash reads a CR as part of each line, and a backslash as an escape.
+            stub.write_text(f"""#!/bin/bash
+echo "$@" >> '{work.as_posix()}/calls'
 if [ "$1" = surface ]; then
   case "$2" in *base) [ {base_export} = 0 ] || {{ echo 'unclassified: x' >&2; echo 'horizon-stage surface: unknown key `access`' >&2; exit 1; }};; esac
   case "$2" in *head) [ {head_export} = 0 ] || {{ echo 'horizon-stage surface: a.rs: parse error' >&2; exit 1; }};; esac
@@ -78,8 +85,14 @@ fi
 echo "Surface: report"; [ -z "{diff_err}" ] && [ {diff_exit} != 0 ] && echo "breaking change without a change note: fn:a" >&2
 [ -n "{diff_err}" ] && echo "horizon-stage: $2: {diff_err}" >&2
 exit {diff_exit}
-""")
-            tool.chmod(0o755)
+""", newline="\n")
+            stub.chmod(0o755)
+            tool = stub
+            if os.name == "nt":
+                # Windows starts programs and batch files, not a script with a shebang: a batch file hands the stub
+                # to the bash on PATH, as the real horizon-stage would be started.
+                tool = work / "horizon-stage.bat"
+                tool.write_text(f'@"{BASH}" "{stub}" %*\n')
             (work / "base").mkdir()
             code, text = surface_report.report(str(tool), work / "base", work / "head", work, gate_on, layouts)
             return code, text, (work / "calls").read_text()
